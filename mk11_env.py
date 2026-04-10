@@ -212,11 +212,12 @@ class MK11VecEnv(VecEnv):
         self.WALK_SPEED = 15.0
         self.GRAVITY = 20.0
         self.delay_frames = 4
-
-        self.max_frames = 3600
+        self.max_frames = 3600 
 
         observation_space = spaces.Box(low=-1.0, high=1.0, shape=(60,), dtype=np.float32)
-        action_space = spaces.MultiBinary(12) 
+        
+        # THE FIX: Switch to a single integer choice (0 to 63)
+        action_space = spaces.Discrete(NUM_ACTIONS) 
         super().__init__(num_envs, observation_space, action_space)
 
         self.p1_pos = np.zeros((num_envs, 2), dtype=np.float32)
@@ -237,29 +238,21 @@ class MK11VecEnv(VecEnv):
         self.ep_returns = np.zeros(num_envs, dtype=np.float32)
         self.ep_lengths = np.zeros(num_envs, dtype=np.int32)
         
-        self.action_buffer = np.zeros((num_envs, self.delay_frames, 12), dtype=np.int32)
-        self.opp_action_buffer = np.zeros((num_envs, self.delay_frames, 12), dtype=np.int32)
-        self.opp_actions = np.zeros((num_envs, 12), dtype=np.int32)
+        # The buffers now hold single integers!
+        self.action_buffer = np.zeros((num_envs, self.delay_frames), dtype=np.int32)
+        self.opp_action_buffer = np.zeros((num_envs, self.delay_frames), dtype=np.int32)
+        self.opp_actions = np.zeros(num_envs, dtype=np.int32)
 
     def reset(self):
         return self._reset_all(np.arange(self.n))
 
     def _reset_all(self, idx):
-        self.p1_pos[idx, 0] = 600.0
-        self.p1_pos[idx, 1] = 0.0
-        self.p2_pos[idx, 0] = 1200.0
-        self.p2_pos[idx, 1] = 0.0
-        
-        self.p1_hp[idx] = 1.0
-        self.p2_hp[idx] = 1.0
-        
-        self.p1_y_vel[idx] = 0.0
-        self.p2_y_vel[idx] = 0.0
-        
-        self.p1_cd[idx] = 0
-        self.p2_cd[idx] = 0
-        self.p1_stun[idx] = 0
-        self.p2_stun[idx] = 0
+        self.p1_pos[idx, 0] = 600.0; self.p1_pos[idx, 1] = 0.0
+        self.p2_pos[idx, 0] = 1200.0; self.p2_pos[idx, 1] = 0.0
+        self.p1_hp[idx] = 1.0; self.p2_hp[idx] = 1.0
+        self.p1_y_vel[idx] = 0.0; self.p2_y_vel[idx] = 0.0
+        self.p1_cd[idx] = 0; self.p2_cd[idx] = 0
+        self.p1_stun[idx] = 0; self.p2_stun[idx] = 0
         self.hitstop_timer[idx] = 0
 
         self.action_buffer[idx] = 0
@@ -298,93 +291,27 @@ class MK11VecEnv(VecEnv):
         return opp_history.reshape(self.n, -1).astype(np.float32)
 
     def set_opponent_actions(self, actions: np.ndarray):
-        if actions.ndim == 1:
-            padded = np.zeros((self.n, 12), dtype=np.int32)
-            padded[:, 0] = actions 
-            self.opp_actions = padded
-        else:
-            self.opp_actions = actions
-    
-    def _decode_multibinary(self, actions, p_pos, opp_pos):
-        if actions.ndim == 1: return actions.astype(np.int32)
-        if np.max(actions) > 1: return actions[:, 0].astype(np.int32)
-            
-        N = actions.shape[0]
-        mapped = np.zeros(N, dtype=np.int32)
-        
-        up = np.copy(actions[:, 0])
-        dn = np.copy(actions[:, 1])
-        lf = np.copy(actions[:, 2])
-        rt = np.copy(actions[:, 3])
-        sq = actions[:, 4]; tr = actions[:, 5]; cr = actions[:, 6]; ci = actions[:, 7]
-        l1 = actions[:, 8]; r1 = actions[:, 9]; l2 = actions[:, 10]; r2 = actions[:, 11]
-
-        up_dn_conflict = (up > 0) & (dn > 0)
-        up[up_dn_conflict] = 0
-        dn[up_dn_conflict] = 0
-
-        lf_rt_conflict = (lf > 0) & (rt > 0)
-        lf[lf_rt_conflict] = 0
-        rt[lf_rt_conflict] = 0
-
-        p_right = p_pos[:, 0] < opp_pos[:, 0]
-        fwd = np.where(p_right, rt, lf)
-        bwd = np.where(p_right, lf, rt)
-        
-        mapped = np.where((fwd > 0), 1, mapped)
-        mapped = np.where((bwd > 0), 2, mapped)
-        mapped = np.where((dn > 0), 4, mapped)
-        mapped = np.where((r2 > 0), 3, mapped)
-        mapped = np.where((r2 > 0) & (dn > 0), 5, mapped)
-        mapped = np.where((sq > 0), 19, mapped) 
-        mapped = np.where((tr > 0), 20, mapped) 
-        mapped = np.where((cr > 0), 21, mapped) 
-        mapped = np.where((ci > 0), 22, mapped) 
-        mapped = np.where((bwd > 0) & (sq > 0), 23, mapped) 
-        mapped = np.where((fwd > 0) & (tr > 0), 24, mapped) 
-        mapped = np.where((bwd > 0) & (cr > 0), 25, mapped) 
-        mapped = np.where((fwd > 0) & (ci > 0), 26, mapped) 
-        mapped = np.where((up > 0) & ((sq > 0) | (tr > 0)), 27, mapped) 
-        mapped = np.where((up > 0) & ((cr > 0) | (ci > 0)), 28, mapped) 
-        mapped = np.where((dn > 0) & (sq > 0), 15, mapped) 
-        mapped = np.where((dn > 0) & (tr > 0), 16, mapped) 
-        mapped = np.where((dn > 0) & (cr > 0), 17, mapped) 
-        mapped = np.where((dn > 0) & (ci > 0), 18, mapped) 
-        mapped = np.where((l1 > 0), 10, mapped) 
-        mapped = np.where((l2 > 0) & (r2 > 0), 14, mapped) 
-        mapped = np.where((dn > 0) & (fwd > 0) & (sq > 0), 48, mapped)
-        mapped = np.where((dn > 0) & (fwd > 0) & (cr > 0), 49, mapped) 
-        mapped = np.where((dn > 0) & (bwd > 0) & (ci > 0), 50, mapped) 
-        mapped = np.where((mapped == 48) & (r1 > 0), 51, mapped)
-        mapped = np.where((mapped == 49) & (r1 > 0), 52, mapped)
-        mapped = np.where((mapped == 50) & (r1 > 0), 53, mapped)
-        return mapped
+        self.opp_actions = actions
 
     def step_async(self, actions):
-        # Push into Input Delay Queue
         self.action_buffer = np.roll(self.action_buffer, shift=-1, axis=1)
-        self.action_buffer[:, -1, :] = actions
+        self.action_buffer[:, -1] = actions
 
         self.opp_action_buffer = np.roll(self.opp_action_buffer, shift=-1, axis=1)
-        self.opp_action_buffer[:, -1, :] = self.opp_actions
+        self.opp_action_buffer[:, -1] = self.opp_actions
 
     def step_wait(self):
         self.ep_lengths += 1
         
-        # 1. Pull the delayed actions from the buffer (Simulating Engine Lag)
-        delayed_actions = self.action_buffer[:, 0, :]
-        delayed_opp_actions = self.opp_action_buffer[:, 0, :]
-        
-        p1_macros = self._decode_multibinary(delayed_actions, self.p1_pos, self.p2_pos)
-        p2_macros = self._decode_multibinary(delayed_opp_actions, self.p2_pos, self.p1_pos)
+        # Actions are already decoded integers! No complex function needed!
+        p1_macros = self.action_buffer[:, 0]
+        p2_macros = self.opp_action_buffer[:, 0]
 
         prev_p1_hp, prev_p2_hp = np.copy(self.p1_hp), np.copy(self.p2_hp)
         dist = np.abs(self.p1_pos[:, 0] - self.p2_pos[:, 0])
 
-        # 2. GLOBAL HITSTOP FREEZE
         in_hitstop = self.hitstop_timer > 0
 
-        # 3. INTENTS & LOCKOUTS
         p1_blocking_high = (p1_macros == 3) | (p1_macros == 2)
         p1_blocking_low = (p1_macros == 5)
         p2_blocking_high = (p2_macros == 3) | (p2_macros == 2)
@@ -404,14 +331,12 @@ class MK11VecEnv(VecEnv):
         p1_is_attacking = (p1_macros != 0) & (_sz_dmg[p1_macros] > 0)
         p2_is_attacking = (p2_macros != 0) & (_kol_dmg[p2_macros] > 0)
 
-        # 4. TIMERS (Only tick down if NOT in hitstop)
         self.p1_cd = np.where(~in_hitstop, np.where(p1_is_attacking, (_sz_startup[p1_macros] + _sz_rec[p1_macros]).astype(np.int32), np.maximum(0, self.p1_cd - 1)), self.p1_cd)
         self.p2_cd = np.where(~in_hitstop, np.where(p2_is_attacking, (_kol_startup[p2_macros] + _kol_rec[p2_macros]).astype(np.int32), np.maximum(0, self.p2_cd - 1)), self.p2_cd)
         
         self.p1_stun = np.where(~in_hitstop, np.maximum(0, self.p1_stun - 1), self.p1_stun)
         self.p2_stun = np.where(~in_hitstop, np.maximum(0, self.p2_stun - 1), self.p2_stun)
 
-        # 5. PHYSICS (Only move if NOT in hitstop)
         p1_jumping = np.isin(p1_macros, [27, 28]) & (self.p1_pos[:, 1] <= 0) & ~p1_locked
         self.p1_y_vel = np.where(~in_hitstop, np.where(p1_jumping, 45.0, self.p1_y_vel - self.GRAVITY), self.p1_y_vel)
         self.p1_pos[:, 1] = np.where(~in_hitstop, np.maximum(0, self.p1_pos[:, 1] + self.p1_y_vel), self.p1_pos[:, 1])
@@ -423,26 +348,14 @@ class MK11VecEnv(VecEnv):
         self.p1_pos[:, 0] = np.clip(self.p1_pos[:, 0], 0.0, self.MAX_STAGE_X)
         self.p2_pos[:, 0] = np.clip(self.p2_pos[:, 0], 0.0, self.MAX_STAGE_X)
 
-        # 6. COMBAT LOGIC
         p1_atk_type = _sz_type[p1_macros]
         p2_atk_type = _kol_type[p2_macros]
 
         p1_y_whiff = ((p1_atk_type == 2) | (p1_atk_type == 3)) & (self.p2_pos[:, 1] > 50.0)
         p2_y_whiff = ((p2_atk_type == 2) | (p2_atk_type == 3)) & (self.p1_pos[:, 1] > 50.0)
 
-        p2_blocks_p1 = (
-            (((p1_atk_type == 1) | (p1_atk_type == 4)) & p2_blocking_high) | 
-            ((p1_atk_type == 3) & p2_blocking_low) | 
-            ((p1_atk_type == 2) & (p2_blocking_high | p2_blocking_low)) |
-            ((p1_atk_type == 6) & (p2_blocking_high | p2_blocking_low))
-        )
-        
-        p1_blocks_p2 = (
-            (((p2_atk_type == 1) | (p2_atk_type == 4)) & p1_blocking_high) | 
-            ((p2_atk_type == 3) & p1_blocking_low) | 
-            ((p2_atk_type == 2) & (p1_blocking_high | p1_blocking_low)) |
-            ((p2_atk_type == 6) & (p1_blocking_high | p1_blocking_low))
-        )
+        p2_blocks_p1 = ((((p1_atk_type == 1) | (p1_atk_type == 4)) & p2_blocking_high) | ((p1_atk_type == 3) & p2_blocking_low) | ((p1_atk_type == 2) & (p2_blocking_high | p2_blocking_low)) | ((p1_atk_type == 6) & (p2_blocking_high | p2_blocking_low)))
+        p1_blocks_p2 = ((((p2_atk_type == 1) | (p2_atk_type == 4)) & p1_blocking_high) | ((p2_atk_type == 3) & p1_blocking_low) | ((p2_atk_type == 2) & (p1_blocking_high | p1_blocking_low)) | ((p2_atk_type == 6) & (p1_blocking_high | p1_blocking_low)))
 
         p1_clean_hit = p1_is_attacking & (dist <= _sz_reach[p1_macros]) & ~p1_y_whiff & ~p2_blocks_p1 & ~in_hitstop
         p2_clean_hit = p2_is_attacking & (dist <= _kol_reach[p2_macros]) & ~p2_y_whiff & ~p1_blocks_p2 & ~in_hitstop
@@ -459,11 +372,9 @@ class MK11VecEnv(VecEnv):
         self.p2_stun = np.where(p1_clean_hit, 25, self.p2_stun)
         self.p1_stun = np.where(p2_clean_hit, 25, self.p1_stun)
 
-        # Trigger hitstop freeze if ANY contact is made
         new_hit = p1_clean_hit | p2_clean_hit | p1_blocked_hit | p2_blocked_hit
         self.hitstop_timer = np.where(new_hit, 5, np.maximum(0, self.hitstop_timer - 1))
 
-        # 7. REWARDS, PENALTIES & TERMINATION
         damage_done = (prev_p2_hp - self.p2_hp) * 1000.0
         damage_taken = (prev_p1_hp - self.p1_hp) * 1000.0
         
@@ -471,31 +382,19 @@ class MK11VecEnv(VecEnv):
         reward += np.where(dist <= 250.0, 0.5, 0.0) 
         reward -= np.where(dist >= 600.0, 0.5, 0.0)
 
-        # Penalize excessive inputs to encourage clean combos
-        buttons_pressed = np.sum(delayed_actions, axis=1)
-        reward -= np.where(buttons_pressed > 2, (buttons_pressed - 2) * 0.5, 0.0)
+        # NOTE: Mashing penalty has been entirely REMOVED since Discrete space cannot mash!
 
-        # THE FIX: Check for Time Out
         time_over = self.ep_lengths >= self.max_frames
-        
-        # Determine who had more health if time ran out
         p1_wins_timeout = time_over & (self.p1_hp > self.p2_hp)
         p2_wins_timeout = time_over & (self.p2_hp > self.p1_hp)
 
-        # Terminate if someone dies OR time runs out
         died = (self.p1_hp <= 0) | (self.p2_hp <= 0)
         terminated = died | time_over
 
-        # Apply massive Win/Loss rewards based on Deaths
         reward += np.where(self.p2_hp <= 0, 1000.0, 0.0)
         reward -= np.where(self.p1_hp <= 0, 1000.0, 0.0)
-        
-        # Apply massive Win/Loss rewards based on Time Outs
         reward += np.where(p2_wins_timeout, 1000.0, 0.0)
         reward -= np.where(p1_wins_timeout, 1000.0, 0.0)
-
-        # THE FIX: THE COWARDICE PENALTY
-        # If time runs out and health is tied, hit both bots with a massive penalty
         is_draw = time_over & (self.p1_hp == self.p2_hp)
         reward -= np.where(is_draw, 1000.0, 0.0)
 
