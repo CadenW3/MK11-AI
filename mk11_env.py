@@ -1,238 +1,556 @@
+import numpy as np
+import os
+import time
+import argparse
+import torch
 import gymnasium as gym
 from gymnasium import spaces
-import numpy as np
+from stable_baselines3.common.vec_env import VecEnv
+from sb3_contrib import RecurrentPPO
 
+# ==========================================
+# SUB-ZERO FULL FRAME DATA (P1 - 64 Actions)
+# ==========================================
 SUBZERO_MOVES = {
-    0: {"name": "Idle", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
-    1: {"name": "Walk Forward", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, 
-    2: {"name": "Walk Back", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
-    3: {"name": "Stand Block", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
-    4: {"name": "Crouch", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, 
-    5: {"name": "Crouch Block", "frames": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
+    # System & Movement (0-9)
+    0:  {"name": "Idle",           "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    1:  {"name": "Walk Forward",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    2:  {"name": "Walk Back",      "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    3:  {"name": "Stand Block",    "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    4:  {"name": "Crouch",         "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    5:  {"name": "Crouch Block",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    6:  {"name": "Dash Forward",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 15},
+    7:  {"name": "Dash Back",      "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 15},
+    8:  {"name": "Forward Roll",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 4,  "rec": 30},
+    9:  {"name": "Backward Roll",  "reach": 0,    "dmg": 0,   "type": "none",       "startup": 4,  "rec": 30},
+
+    # Throws & System Attacks (10-14)
+    10: {"name": "Forward Throw",  "reach": 40,   "dmg": 130, "type": "unblockable","startup": 10, "rec": 35},
+    11: {"name": "Back Throw",     "reach": 40,   "dmg": 130, "type": "unblockable","startup": 10, "rec": 35},
+    12: {"name": "Hop Attack",     "reach": 60,   "dmg": 30,  "type": "overhead",   "startup": 11, "rec": 22},
+    13: {"name": "Wakeup U3",      "reach": 65,   "dmg": 50,  "type": "mid",        "startup": 11, "rec": 30},
+    14: {"name": "FATAL BLOW",     "reach": 400,  "dmg": 320, "type": "mid",        "startup": 20, "rec": 60},
+
+    # Pokes & Uppercuts (15-18)
+    15: {"name": "D1 Poke",        "reach": 55,   "dmg": 20,  "type": "mid",        "startup": 6,  "rec": 15},
+    16: {"name": "D2 Uppercut",    "reach": 80,   "dmg": 140, "type": "high",       "startup": 9,  "rec": 35},
+    17: {"name": "D3 Low Poke",    "reach": 60,   "dmg": 20,  "type": "low",        "startup": 9,  "rec": 18},
+    18: {"name": "D4 Sweep",       "reach": 85,   "dmg": 30,  "type": "low",        "startup": 11, "rec": 22},
+
+    # Base Standing Normals (19-26)
+    19: {"name": "Stand 1",        "reach": 55,   "dmg": 20,  "type": "high",       "startup": 7,  "rec": 16},
+    20: {"name": "Stand 2",        "reach": 60,   "dmg": 30,  "type": "high",       "startup": 9,  "rec": 20},
+    21: {"name": "Stand 3",        "reach": 65,   "dmg": 40,  "type": "high",       "startup": 11, "rec": 22},
+    22: {"name": "Stand 4",        "reach": 70,   "dmg": 50,  "type": "high",       "startup": 12, "rec": 24},
+    23: {"name": "B1",             "reach": 65,   "dmg": 30,  "type": "mid",        "startup": 13, "rec": 20},
+    24: {"name": "F2 Overhead",    "reach": 110,  "dmg": 70,  "type": "overhead",   "startup": 19, "rec": 35},
+    25: {"name": "B3",             "reach": 75,   "dmg": 30,  "type": "low",        "startup": 13, "rec": 22},
+    26: {"name": "F4",             "reach": 85,   "dmg": 50,  "type": "mid",        "startup": 16, "rec": 28},
+
+    # Jump Attacks (27-28)
+    27: {"name": "Jump Punch (J1/J2)","reach": 75, "dmg": 50, "type": "overhead",   "startup": 8,  "rec": 20},
+    28: {"name": "Jump Kick (J3/J4)", "reach": 110,"dmg": 70, "type": "overhead",   "startup": 10, "rec": 30},
+
+    # Strings - 1 Series (29-32)
+    29: {"name": "1,1",            "reach": 60,   "dmg": 50,  "type": "high",       "startup": 10, "rec": 18},
+    30: {"name": "1,1,1",          "reach": 60,   "dmg": 90,  "type": "high",       "startup": 12, "rec": 20},
+    31: {"name": "1,2",            "reach": 65,   "dmg": 60,  "type": "mid",        "startup": 11, "rec": 22},
+    32: {"name": "1,2,4",          "reach": 75,   "dmg": 110, "type": "mid",        "startup": 14, "rec": 25},
+
+    # Strings - 2 Series (33-36)
+    33: {"name": "2,1",            "reach": 65,   "dmg": 50,  "type": "mid",        "startup": 10, "rec": 20},
+    34: {"name": "2,1,2",          "reach": 70,   "dmg": 90,  "type": "mid",        "startup": 14, "rec": 24},
+    35: {"name": "2,3",            "reach": 75,   "dmg": 70,  "type": "mid",        "startup": 13, "rec": 22},
+    36: {"name": "2,3,4",          "reach": 80,   "dmg": 110, "type": "mid",        "startup": 16, "rec": 26},
+
+    # Strings - Back/Forward Series (37-47)
+    37: {"name": "B1,4",           "reach": 70,   "dmg": 60,  "type": "low",        "startup": 14, "rec": 25},
+    38: {"name": "B1,4,3",         "reach": 85,   "dmg": 116, "type": "mid",        "startup": 20, "rec": 45}, 
+    39: {"name": "F2,4",           "reach": 115,  "dmg": 100, "type": "mid",        "startup": 18, "rec": 30},
+    40: {"name": "B3,2",           "reach": 80,   "dmg": 90,  "type": "mid",        "startup": 15, "rec": 25},
+    41: {"name": "B3,2,1",         "reach": 85,   "dmg": 120, "type": "mid",        "startup": 16, "rec": 30},
+    42: {"name": "F4,2",           "reach": 90,   "dmg": 80,  "type": "mid",        "startup": 15, "rec": 22},
+    43: {"name": "F4,2,3",         "reach": 95,   "dmg": 110, "type": "mid",        "startup": 17, "rec": 26},
+    44: {"name": "Chinese Ninja",  "reach": 65,   "dmg": 30,  "type": "mid",        "startup": 13, "rec": 20}, 
+    45: {"name": "Cold Encounter", "reach": 60,   "dmg": 30,  "type": "high",       "startup": 9,  "rec": 20},
+    46: {"name": "Unchained (B3)",     "reach": 75, "dmg": 30, "type": "low",       "startup": 13, "rec": 22},
+    47: {"name": "Frosty (F4)",        "reach": 85, "dmg": 50, "type": "mid",       "startup": 16, "rec": 28},
+
+    # Specials (48-55)
+    48: {"name": "Ice Ball",       "reach": 1900, "dmg": 50,  "type": "projectile", "startup": 18, "rec": 60},
+    49: {"name": "Slide",          "reach": 300,  "dmg": 80,  "type": "low",        "startup": 11, "rec": 55}, 
+    50: {"name": "Creeping Ice",   "reach": 140,  "dmg": 70,  "type": "low",        "startup": 16, "rec": 40},
+    51: {"name": "Amp Ice Ball",   "reach": 1900, "dmg": 80,  "type": "projectile", "startup": 18, "rec": 45},
+    52: {"name": "Amp Slide",      "reach": 300,  "dmg": 120, "type": "low",        "startup": 11, "rec": 65},
+    53: {"name": "Amp Creeping Ice","reach": 140, "dmg": 120, "type": "low",        "startup": 16, "rec": 45},
     
-    # Attacks: [Startup, Active, Recovery, Damage, Hitbox_W, Hitbox_H, Hitbox_Y, Type, Hit_Stun, Blk_Stun, Push, Launch]
-    6: {"name": "1 (High Jab)", "frames": [7, 2, 13, 30, 50, 20, 90, 0, 15, -2, 10, 0]}, 
-    7: {"name": "D1 (Mid Poke)", "frames": [7, 2, 11, 20, 55, 20, 40, 1, 11, -5, 5, 0]}, 
-    8: {"name": "B3 (Low Kick)", "frames": [13, 3, 18, 40, 65, 20, 10, 2, 18, -7, 15, 0]}, 
-    9: {"name": "F2 (Overhead)", "frames": [19, 3, 21, 60, 55, 40, 80, 3, 25, -12, 20, 0]}, 
-    10: {"name": "Slide (Launch)", "frames": [11, 9, 28, 80, 90, 30, 0, 2, 0, -20, 30, 25]}, 
-    11: {"name": "Forward Throw", "frames": [10, 2, 20, 130, 35, 30, 80, 4, 0, 0, 50, 0]}, 
-    
-    12: {"name": "Roll Forward", "frames": [0, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, 
-    13: {"name": "Roll Back", "frames": [0, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
-    14: {"name": "Delay Wakeup", "frames": [0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
+    # Empty buffers
+    54: {"name": "Interact FWD",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 15, "rec": 20},
+    55: {"name": "Interact BWD",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 15, "rec": 20},
+    56: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    57: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    58: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    59: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    60: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    61: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    62: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    63: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
 }
 
-class MK11AdvancedEnv(gym.Env):
-    def __init__(self):
-        super(MK11AdvancedEnv, self).__init__()
-        self.action_space = spaces.Discrete(len(SUBZERO_MOVES))
-        self.observation_space = spaces.Box(
-            low=np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-            high=np.array([1920, 1920, 1080, 1080, 1000, 1000, 200, 200], dtype=np.float32),
-            dtype=np.float32
+# ==========================================
+# KOLLECTOR FULL FRAME DATA (P2 - 64 Actions)
+# ==========================================
+KOLLECTOR_MOVES = {
+    # System & Movement (0-9)
+    0:  {"name": "Idle",           "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    1:  {"name": "Walk Forward",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    2:  {"name": "Walk Back",      "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    3:  {"name": "Stand Block",    "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    4:  {"name": "Crouch",         "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    5:  {"name": "Crouch Block",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 0},
+    6:  {"name": "Dash Forward",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 15},
+    7:  {"name": "Dash Back",      "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 15},
+    8:  {"name": "Forward Roll",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 4,  "rec": 30},
+    9:  {"name": "Backward Roll",  "reach": 0,    "dmg": 0,   "type": "none",       "startup": 4,  "rec": 30},
+
+    # Throws & System Attacks (10-14)
+    10: {"name": "Forward Throw",  "reach": 45,   "dmg": 130, "type": "unblockable","startup": 10, "rec": 35},
+    11: {"name": "Back Throw",     "reach": 45,   "dmg": 130, "type": "unblockable","startup": 10, "rec": 35},
+    12: {"name": "Hop Attack",     "reach": 65,   "dmg": 30,  "type": "overhead",   "startup": 12, "rec": 22},
+    13: {"name": "Wakeup U3",      "reach": 70,   "dmg": 50,  "type": "mid",        "startup": 12, "rec": 30}, 
+    14: {"name": "FATAL BLOW",     "reach": 400,  "dmg": 320, "type": "mid",        "startup": 18, "rec": 60},
+
+    # Pokes & Uppercuts (15-18)
+    15: {"name": "D1 Poke",        "reach": 60,   "dmg": 20,  "type": "mid",        "startup": 7,  "rec": 16},
+    16: {"name": "D2 Uppercut",    "reach": 85,   "dmg": 140, "type": "high",       "startup": 10, "rec": 35},
+    17: {"name": "D3 Low Poke",    "reach": 65,   "dmg": 20,  "type": "low",        "startup": 10, "rec": 18},
+    18: {"name": "D4 Sweep",       "reach": 100,  "dmg": 30,  "type": "low",        "startup": 14, "rec": 24},
+
+    # Base Standing Normals (19-26)
+    19: {"name": "Stand 1",        "reach": 60,   "dmg": 20,  "type": "high",       "startup": 8,  "rec": 18},
+    20: {"name": "Stand 2",        "reach": 65,   "dmg": 30,  "type": "high",       "startup": 10, "rec": 22},
+    21: {"name": "Stand 3",        "reach": 70,   "dmg": 40,  "type": "high",       "startup": 12, "rec": 24},
+    22: {"name": "Stand 4",        "reach": 75,   "dmg": 50,  "type": "high",       "startup": 11, "rec": 24},
+    23: {"name": "F1",             "reach": 70,   "dmg": 30,  "type": "mid",        "startup": 11, "rec": 20},
+    24: {"name": "F2",             "reach": 80,   "dmg": 30,  "type": "mid",        "startup": 13, "rec": 22},
+    25: {"name": "B1",             "reach": 75,   "dmg": 30,  "type": "mid",        "startup": 15, "rec": 24},
+    26: {"name": "F4 Mid Kick",    "reach": 140,  "dmg": 60,  "type": "mid",        "startup": 11, "rec": 30}, 
+
+    # Jump Attacks (27-28)
+    27: {"name": "Jump Punch (J1)","reach": 80, "dmg": 50, "type": "overhead",   "startup": 9,  "rec": 22},
+    28: {"name": "Jump Kick (J3)", "reach": 115,"dmg": 70, "type": "overhead",   "startup": 11, "rec": 32},
+
+    # Strings - 1 & 2 Series (29-34)
+    29: {"name": "1,3",            "reach": 70,   "dmg": 70,  "type": "high",       "startup": 12, "rec": 22},
+    30: {"name": "1,3,1",          "reach": 75,   "dmg": 100, "type": "mid",        "startup": 16, "rec": 25},
+    31: {"name": "F1,2",           "reach": 75,   "dmg": 59,  "type": "mid",        "startup": 14, "rec": 20},
+    32: {"name": "F1,2,D1",        "reach": 80,   "dmg": 109, "type": "low",        "startup": 18, "rec": 25},
+    33: {"name": "F1,2,D2",        "reach": 80,   "dmg": 109, "type": "overhead",   "startup": 20, "rec": 30},
+    34: {"name": "F2,2",           "reach": 85,   "dmg": 60,  "type": "mid",        "startup": 15, "rec": 20},
+
+    # Strings - Command Grabs & B/F Series (35-43)
+    35: {"name": "F2,2,1+3",       "reach": 90,   "dmg": 119, "type": "mid",        "startup": 20, "rec": 45},
+    36: {"name": "B1,2",           "reach": 80,   "dmg": 80,  "type": "mid",        "startup": 15, "rec": 20},
+    37: {"name": "B1,2,2",         "reach": 85,   "dmg": 130, "type": "mid",        "startup": 18, "rec": 28},
+    38: {"name": "2,1+3",          "reach": 65,   "dmg": 60,  "type": "mid",        "startup": 14, "rec": 24},
+    39: {"name": "2,1+3,4",        "reach": 70,   "dmg": 110, "type": "unblockable","startup": 16, "rec": 40},
+    40: {"name": "B2,3",           "reach": 110,  "dmg": 110, "type": "overhead",   "startup": 16, "rec": 40},
+    41: {"name": "F3,1",           "reach": 90,   "dmg": 60,  "type": "mid",        "startup": 14, "rec": 22},
+    42: {"name": "F3,1,2",         "reach": 95,   "dmg": 90,  "type": "high",       "startup": 16, "rec": 24},
+    43: {"name": "F3,1,2,3",       "reach": 100,  "dmg": 140, "type": "mid",        "startup": 20, "rec": 30},
+
+    # Staggers & Utilities (44-47)
+    44: {"name": "4,4",            "reach": 85,   "dmg": 60,  "type": "mid",        "startup": 15, "rec": 25},
+    45: {"name": "4,4,3",          "reach": 90,   "dmg": 110, "type": "low",        "startup": 18, "rec": 35},
+    46: {"name": "B3",             "reach": 95,   "dmg": 40,  "type": "mid",        "startup": 14, "rec": 22},
+    47: {"name": "B4",             "reach": 100,  "dmg": 50,  "type": "low",        "startup": 15, "rec": 25},
+
+    # Specials (48-55)
+    48: {"name": "Bolas",          "reach": 1900, "dmg": 60,  "type": "projectile", "startup": 17, "rec": 50},
+    49: {"name": "Demonic Mace",   "reach": 160,  "dmg": 90,  "type": "overhead",   "startup": 25, "rec": 45}, 
+    50: {"name": "Relic Lure",     "reach": 180,  "dmg": 70,  "type": "mid",        "startup": 15, "rec": 35},
+    51: {"name": "Amp Bolas",      "reach": 1900, "dmg": 90,  "type": "projectile", "startup": 17, "rec": 45},
+    52: {"name": "Amp Mace",       "reach": 160,  "dmg": 130, "type": "overhead",   "startup": 25, "rec": 40},
+    53: {"name": "Amp Relic Lure", "reach": 180,  "dmg": 110, "type": "mid",        "startup": 15, "rec": 30},
+    
+    # Empty buffers
+    54: {"name": "Interact FWD",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 15, "rec": 20},
+    55: {"name": "Interact BWD",   "reach": 0,    "dmg": 0,   "type": "none",       "startup": 15, "rec": 20},
+    56: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    57: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    58: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    59: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    60: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    61: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    62: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+    63: {"name": "Wait Frame",     "reach": 0,    "dmg": 0,   "type": "none",       "startup": 0,  "rec": 1},
+}
+
+NUM_ACTIONS = 64
+_type_map = {"none": 0, "high": 1, "mid": 2, "low": 3, "overhead": 4, "unblockable": 5, "projectile": 6}
+
+# Pre-compute Tables
+_sz_reach   = np.array([SUBZERO_MOVES[i]["reach"]   for i in range(NUM_ACTIONS)], dtype=np.float32)
+_sz_dmg     = np.array([SUBZERO_MOVES[i]["dmg"]     for i in range(NUM_ACTIONS)], dtype=np.float32)
+_sz_startup = np.array([SUBZERO_MOVES[i]["startup"] for i in range(NUM_ACTIONS)], dtype=np.float32)
+_sz_rec     = np.array([SUBZERO_MOVES[i]["rec"]     for i in range(NUM_ACTIONS)], dtype=np.float32)
+_sz_type    = np.array([_type_map[SUBZERO_MOVES[i]["type"]] for i in range(NUM_ACTIONS)], dtype=np.int32)
+
+_kol_reach   = np.array([KOLLECTOR_MOVES[i]["reach"]   for i in range(NUM_ACTIONS)], dtype=np.float32)
+_kol_dmg     = np.array([KOLLECTOR_MOVES[i]["dmg"]     for i in range(NUM_ACTIONS)], dtype=np.float32)
+_kol_startup = np.array([KOLLECTOR_MOVES[i]["startup"] for i in range(NUM_ACTIONS)], dtype=np.float32)
+_kol_rec     = np.array([KOLLECTOR_MOVES[i]["rec"]     for i in range(NUM_ACTIONS)], dtype=np.float32)
+_kol_type    = np.array([_type_map[KOLLECTOR_MOVES[i]["type"]] for i in range(NUM_ACTIONS)], dtype=np.int32)
+
+class MK11VecEnv(VecEnv):
+    def __init__(self, num_envs: int, training_side: str = "sz"):
+        self.training_side = training_side
+        self.n = num_envs
+        
+        self.MAX_STAGE_X = 2500.0
+        self.MAX_JUMP_Y = 500.0
+        self.WALK_SPEED = 15.0
+        self.GRAVITY = 20.0
+        self.delay_frames = 4
+
+        self.max_frames = 3600
+
+        observation_space = spaces.Box(low=-1.0, high=1.0, shape=(60,), dtype=np.float32)
+        action_space = spaces.MultiBinary(12) 
+        super().__init__(num_envs, observation_space, action_space)
+
+        self.p1_pos = np.zeros((num_envs, 2), dtype=np.float32)
+        self.p2_pos = np.zeros((num_envs, 2), dtype=np.float32)
+        self.p1_hp  = np.zeros(num_envs, dtype=np.float32)
+        self.p2_hp  = np.zeros(num_envs, dtype=np.float32)
+        
+        self.p1_y_vel = np.zeros(num_envs, dtype=np.float32)
+        self.p2_y_vel = np.zeros(num_envs, dtype=np.float32)
+        
+        self.p1_cd = np.zeros(num_envs, dtype=np.int32)
+        self.p2_cd = np.zeros(num_envs, dtype=np.int32)
+        self.p1_stun = np.zeros(num_envs, dtype=np.int32)
+        self.p2_stun = np.zeros(num_envs, dtype=np.int32)
+        self.hitstop_timer = np.zeros(num_envs, dtype=np.int32)
+
+        self.history = np.zeros((num_envs, 10, 6), dtype=np.float32)
+        self.ep_returns = np.zeros(num_envs, dtype=np.float32)
+        self.ep_lengths = np.zeros(num_envs, dtype=np.int32)
+        
+        self.action_buffer = np.zeros((num_envs, self.delay_frames, 12), dtype=np.int32)
+        self.opp_action_buffer = np.zeros((num_envs, self.delay_frames, 12), dtype=np.int32)
+        self.opp_actions = np.zeros((num_envs, 12), dtype=np.int32)
+
+    def reset(self):
+        return self._reset_all(np.arange(self.n))
+
+    def _reset_all(self, idx):
+        self.p1_pos[idx, 0] = 600.0
+        self.p1_pos[idx, 1] = 0.0
+        self.p2_pos[idx, 0] = 1200.0
+        self.p2_pos[idx, 1] = 0.0
+        
+        self.p1_hp[idx] = 1.0
+        self.p2_hp[idx] = 1.0
+        
+        self.p1_y_vel[idx] = 0.0
+        self.p2_y_vel[idx] = 0.0
+        
+        self.p1_cd[idx] = 0
+        self.p2_cd[idx] = 0
+        self.p1_stun[idx] = 0
+        self.p2_stun[idx] = 0
+        self.hitstop_timer[idx] = 0
+
+        self.action_buffer[idx] = 0
+        self.opp_action_buffer[idx] = 0
+        self.ep_returns[idx] = 0.0
+        self.ep_lengths[idx] = 0
+        self.history[idx] = 0.0
+        
+        return self._get_obs()
+
+    def _get_obs(self) -> np.ndarray:
+        raw_dist = np.abs(self.p1_pos[:, 0] - self.p2_pos[:, 0])
+        norm_dist = np.clip(raw_dist / self.MAX_STAGE_X, 0.0, 1.0)
+        norm_p1_y = np.clip(self.p1_pos[:, 1] / self.MAX_JUMP_Y, 0.0, 1.0)
+        norm_p2_y = np.clip(self.p2_pos[:, 1] / self.MAX_JUMP_Y, 0.0, 1.0)
+        facing = np.where(self.p2_pos[:, 0] > self.p1_pos[:, 0], 1.0, -1.0)
+
+        if self.training_side == "sz":
+            current_frame = np.column_stack([self.p1_hp, self.p2_hp, norm_dist, norm_p1_y, norm_p2_y, facing])
+        else:
+            current_frame = np.column_stack([self.p2_hp, self.p1_hp, norm_dist, norm_p2_y, norm_p1_y, -facing])
+
+        self.history = np.roll(self.history, shift=-1, axis=1)
+        self.history[:, -1, :] = current_frame
+        return self.history.reshape(self.n, -1).astype(np.float32)
+
+    def get_opponent_obs(self) -> np.ndarray:
+        opp_history = np.copy(self.history)
+        temp_hp = np.copy(opp_history[:, :, 0])
+        opp_history[:, :, 0] = opp_history[:, :, 1]
+        opp_history[:, :, 1] = temp_hp
+        temp_y = np.copy(opp_history[:, :, 3])
+        opp_history[:, :, 3] = opp_history[:, :, 4]
+        opp_history[:, :, 4] = temp_y
+        opp_history[:, :, 5] = -opp_history[:, :, 5]
+        return opp_history.reshape(self.n, -1).astype(np.float32)
+
+    def set_opponent_actions(self, actions: np.ndarray):
+        if actions.ndim == 1:
+            padded = np.zeros((self.n, 12), dtype=np.int32)
+            padded[:, 0] = actions 
+            self.opp_actions = padded
+        else:
+            self.opp_actions = actions
+    
+    def _decode_multibinary(self, actions, p_pos, opp_pos):
+        if actions.ndim == 1: return actions.astype(np.int32)
+        if np.max(actions) > 1: return actions[:, 0].astype(np.int32)
+            
+        N = actions.shape[0]
+        mapped = np.zeros(N, dtype=np.int32)
+        
+        up = np.copy(actions[:, 0])
+        dn = np.copy(actions[:, 1])
+        lf = np.copy(actions[:, 2])
+        rt = np.copy(actions[:, 3])
+        sq = actions[:, 4]; tr = actions[:, 5]; cr = actions[:, 6]; ci = actions[:, 7]
+        l1 = actions[:, 8]; r1 = actions[:, 9]; l2 = actions[:, 10]; r2 = actions[:, 11]
+
+        up_dn_conflict = (up > 0) & (dn > 0)
+        up[up_dn_conflict] = 0
+        dn[up_dn_conflict] = 0
+
+        lf_rt_conflict = (lf > 0) & (rt > 0)
+        lf[lf_rt_conflict] = 0
+        rt[lf_rt_conflict] = 0
+
+        p_right = p_pos[:, 0] < opp_pos[:, 0]
+        fwd = np.where(p_right, rt, lf)
+        bwd = np.where(p_right, lf, rt)
+        
+        mapped = np.where((fwd > 0), 1, mapped)
+        mapped = np.where((bwd > 0), 2, mapped)
+        mapped = np.where((dn > 0), 4, mapped)
+        mapped = np.where((r2 > 0), 3, mapped)
+        mapped = np.where((r2 > 0) & (dn > 0), 5, mapped)
+        mapped = np.where((sq > 0), 19, mapped) 
+        mapped = np.where((tr > 0), 20, mapped) 
+        mapped = np.where((cr > 0), 21, mapped) 
+        mapped = np.where((ci > 0), 22, mapped) 
+        mapped = np.where((bwd > 0) & (sq > 0), 23, mapped) 
+        mapped = np.where((fwd > 0) & (tr > 0), 24, mapped) 
+        mapped = np.where((bwd > 0) & (cr > 0), 25, mapped) 
+        mapped = np.where((fwd > 0) & (ci > 0), 26, mapped) 
+        mapped = np.where((up > 0) & ((sq > 0) | (tr > 0)), 27, mapped) 
+        mapped = np.where((up > 0) & ((cr > 0) | (ci > 0)), 28, mapped) 
+        mapped = np.where((dn > 0) & (sq > 0), 15, mapped) 
+        mapped = np.where((dn > 0) & (tr > 0), 16, mapped) 
+        mapped = np.where((dn > 0) & (cr > 0), 17, mapped) 
+        mapped = np.where((dn > 0) & (ci > 0), 18, mapped) 
+        mapped = np.where((l1 > 0), 10, mapped) 
+        mapped = np.where((l2 > 0) & (r2 > 0), 14, mapped) 
+        mapped = np.where((dn > 0) & (fwd > 0) & (sq > 0), 48, mapped)
+        mapped = np.where((dn > 0) & (fwd > 0) & (cr > 0), 49, mapped) 
+        mapped = np.where((dn > 0) & (bwd > 0) & (ci > 0), 50, mapped) 
+        mapped = np.where((mapped == 48) & (r1 > 0), 51, mapped)
+        mapped = np.where((mapped == 49) & (r1 > 0), 52, mapped)
+        mapped = np.where((mapped == 50) & (r1 > 0), 53, mapped)
+        return mapped
+
+    def step_async(self, actions):
+        # Push into Input Delay Queue
+        self.action_buffer = np.roll(self.action_buffer, shift=-1, axis=1)
+        self.action_buffer[:, -1, :] = actions
+
+        self.opp_action_buffer = np.roll(self.opp_action_buffer, shift=-1, axis=1)
+        self.opp_action_buffer[:, -1, :] = self.opp_actions
+
+    def step_wait(self):
+        self.ep_lengths += 1
+        
+        # 1. Pull the delayed actions from the buffer (Simulating Engine Lag)
+        delayed_actions = self.action_buffer[:, 0, :]
+        delayed_opp_actions = self.opp_action_buffer[:, 0, :]
+        
+        p1_macros = self._decode_multibinary(delayed_actions, self.p1_pos, self.p2_pos)
+        p2_macros = self._decode_multibinary(delayed_opp_actions, self.p2_pos, self.p1_pos)
+
+        prev_p1_hp, prev_p2_hp = np.copy(self.p1_hp), np.copy(self.p2_hp)
+        dist = np.abs(self.p1_pos[:, 0] - self.p2_pos[:, 0])
+
+        # 2. GLOBAL HITSTOP FREEZE
+        in_hitstop = self.hitstop_timer > 0
+
+        # 3. INTENTS & LOCKOUTS
+        p1_blocking_high = (p1_macros == 3) | (p1_macros == 2)
+        p1_blocking_low = (p1_macros == 5)
+        p2_blocking_high = (p2_macros == 3) | (p2_macros == 2)
+        p2_blocking_low = (p2_macros == 5)
+
+        p1_locked = (self.p1_cd > 0) | (self.p1_stun > 0)
+        p2_locked = (self.p2_cd > 0) | (self.p2_stun > 0)
+
+        p1_macros = np.where(p1_locked, 0, p1_macros)
+        p2_macros = np.where(p2_locked, 0, p2_macros)
+
+        p1_blocking_high = np.where(p1_locked, False, p1_blocking_high)
+        p1_blocking_low = np.where(p1_locked, False, p1_blocking_low)
+        p2_blocking_high = np.where(p2_locked, False, p2_blocking_high)
+        p2_blocking_low = np.where(p2_locked, False, p2_blocking_low)
+
+        p1_is_attacking = (p1_macros != 0) & (_sz_dmg[p1_macros] > 0)
+        p2_is_attacking = (p2_macros != 0) & (_kol_dmg[p2_macros] > 0)
+
+        # 4. TIMERS (Only tick down if NOT in hitstop)
+        self.p1_cd = np.where(~in_hitstop, np.where(p1_is_attacking, (_sz_startup[p1_macros] + _sz_rec[p1_macros]).astype(np.int32), np.maximum(0, self.p1_cd - 1)), self.p1_cd)
+        self.p2_cd = np.where(~in_hitstop, np.where(p2_is_attacking, (_kol_startup[p2_macros] + _kol_rec[p2_macros]).astype(np.int32), np.maximum(0, self.p2_cd - 1)), self.p2_cd)
+        
+        self.p1_stun = np.where(~in_hitstop, np.maximum(0, self.p1_stun - 1), self.p1_stun)
+        self.p2_stun = np.where(~in_hitstop, np.maximum(0, self.p2_stun - 1), self.p2_stun)
+
+        # 5. PHYSICS (Only move if NOT in hitstop)
+        p1_jumping = np.isin(p1_macros, [27, 28]) & (self.p1_pos[:, 1] <= 0) & ~p1_locked
+        self.p1_y_vel = np.where(~in_hitstop, np.where(p1_jumping, 45.0, self.p1_y_vel - self.GRAVITY), self.p1_y_vel)
+        self.p1_pos[:, 1] = np.where(~in_hitstop, np.maximum(0, self.p1_pos[:, 1] + self.p1_y_vel), self.p1_pos[:, 1])
+
+        facing = np.where(self.p2_pos[:, 0] > self.p1_pos[:, 0], 1.0, -1.0)
+        self.p1_pos[:, 0] += np.where(~in_hitstop & (p1_macros == 1), self.WALK_SPEED * facing, 0.0) 
+        self.p1_pos[:, 0] -= np.where(~in_hitstop & (p1_macros == 2), self.WALK_SPEED * facing, 0.0) 
+        
+        self.p1_pos[:, 0] = np.clip(self.p1_pos[:, 0], 0.0, self.MAX_STAGE_X)
+        self.p2_pos[:, 0] = np.clip(self.p2_pos[:, 0], 0.0, self.MAX_STAGE_X)
+
+        # 6. COMBAT LOGIC
+        p1_atk_type = _sz_type[p1_macros]
+        p2_atk_type = _kol_type[p2_macros]
+
+        p1_y_whiff = ((p1_atk_type == 2) | (p1_atk_type == 3)) & (self.p2_pos[:, 1] > 50.0)
+        p2_y_whiff = ((p2_atk_type == 2) | (p2_atk_type == 3)) & (self.p1_pos[:, 1] > 50.0)
+
+        p2_blocks_p1 = (
+            (((p1_atk_type == 1) | (p1_atk_type == 4)) & p2_blocking_high) | 
+            ((p1_atk_type == 3) & p2_blocking_low) | 
+            ((p1_atk_type == 2) & (p2_blocking_high | p2_blocking_low)) |
+            ((p1_atk_type == 6) & (p2_blocking_high | p2_blocking_low))
+        )
+        
+        p1_blocks_p2 = (
+            (((p2_atk_type == 1) | (p2_atk_type == 4)) & p1_blocking_high) | 
+            ((p2_atk_type == 3) & p1_blocking_low) | 
+            ((p2_atk_type == 2) & (p1_blocking_high | p1_blocking_low)) |
+            ((p2_atk_type == 6) & (p1_blocking_high | p1_blocking_low))
         )
 
-        self.max_health = 1000
-        self.walk_speed = 8 
-        self.base_gravity = 1.5 
-        self.stand_hurtbox = (40, 120)
-        self.crouch_hurtbox = (50, 70)
-
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.sz = self.create_fighter(200) # Start in from the left edge
+        p1_clean_hit = p1_is_attacking & (dist <= _sz_reach[p1_macros]) & ~p1_y_whiff & ~p2_blocks_p1 & ~in_hitstop
+        p2_clean_hit = p2_is_attacking & (dist <= _kol_reach[p2_macros]) & ~p2_y_whiff & ~p1_blocks_p2 & ~in_hitstop
         
-        random_distance = np.random.randint(40, 401)
-        self.k = self.create_fighter(self.sz["x"] + random_distance)
+        p1_blocked_hit = p1_is_attacking & (dist <= _sz_reach[p1_macros]) & ~p1_y_whiff & p2_blocks_p1 & ~in_hitstop
+        p2_blocked_hit = p2_is_attacking & (dist <= _kol_reach[p2_macros]) & ~p2_y_whiff & p1_blocks_p2 & ~in_hitstop
+
+        p1_dmg_dealt = np.where(p1_clean_hit, _sz_dmg[p1_macros], np.where(p1_blocked_hit, _sz_dmg[p1_macros] * 0.2, 0.0))
+        p2_dmg_dealt = np.where(p2_clean_hit, _kol_dmg[p2_macros], np.where(p2_blocked_hit, _kol_dmg[p2_macros] * 0.2, 0.0))
+
+        self.p2_hp = np.maximum(0, self.p2_hp - (p1_dmg_dealt / 1000.0))
+        self.p1_hp = np.maximum(0, self.p1_hp - (p2_dmg_dealt / 1000.0))
+
+        self.p2_stun = np.where(p1_clean_hit, 25, self.p2_stun)
+        self.p1_stun = np.where(p2_clean_hit, 25, self.p1_stun)
+
+        # Trigger hitstop freeze if ANY contact is made
+        new_hit = p1_clean_hit | p2_clean_hit | p1_blocked_hit | p2_blocked_hit
+        self.hitstop_timer = np.where(new_hit, 5, np.maximum(0, self.hitstop_timer - 1))
+
+        # 7. REWARDS, PENALTIES & TERMINATION
+        damage_done = (prev_p2_hp - self.p2_hp) * 1000.0
+        damage_taken = (prev_p1_hp - self.p1_hp) * 1000.0
         
-        self.frames_elapsed = 0
-        return self._get_obs(), {}
+        reward = (damage_done * 5.0) - (damage_taken * 1.5)
+        reward += np.where(dist <= 250.0, 0.5, 0.0) 
+        reward -= np.where(dist >= 600.0, 0.5, 0.0)
 
-    def create_fighter(self, start_x):
-        return {
-            "x": float(start_x), "y": 0.0, "vy": 0.0,
-            "health": float(self.max_health), "meter": 0.0,
-            "state": 0, "timer": 0, "current_move": 0,
-            "blocking": 0, "crouching": 0,
-            "combo_count": 0, "tech_timer": 0, "invincible": 0
-        }
+        # Penalize excessive inputs to encourage clean combos
+        buttons_pressed = np.sum(delayed_actions, axis=1)
+        reward -= np.where(buttons_pressed > 2, (buttons_pressed - 2) * 0.5, 0.0)
 
-    def _get_obs(self):
-        return np.array([
-            self.sz["x"], self.k["x"], 
-            self.sz["y"], self.k["y"],
-            self.sz["health"], self.k["health"], 
-            self.sz["meter"], self.k["meter"]
-        ], dtype=np.float32)
-
-    def check_aabb_collision(self, ax, ay, aw, ah, dx, dy, dw, dh):
-        return (ax < dx + dw and ax + aw > dx and ay < dy + dh and ay + ah > dy)
-
-    def apply_gravity_and_juggling(self, fighter):
-        if fighter["y"] > 0 or fighter["vy"] > 0:
-            fighter["y"] += fighter["vy"]
-            current_gravity = self.base_gravity + (fighter["combo_count"] * 0.25)
-            fighter["vy"] -= current_gravity
-            
-            if fighter["y"] <= 0: 
-                fighter["y"] = 0.0
-                fighter["vy"] = 0.0
-                if fighter["state"] == 4: 
-                    fighter["state"] = 6 
-                    fighter["timer"] = 40 
-                    fighter["invincible"] = 1
-                    fighter["combo_count"] = 0 
-
-    def process_combat(self, attacker, defender, move_data, reward):
-        hw, hh = self.crouch_hurtbox if defender["crouching"] else self.stand_hurtbox
-        aw, ah = move_data[4], move_data[5]
-        ax = attacker["x"] + 20 
-        ay = attacker["y"] + move_data[6]
-        hit_type = move_data[7]
+        # THE FIX: Check for Time Out
+        time_over = self.ep_lengths >= self.max_frames
         
-        if hit_type == 0 and defender["crouching"]:
-            return reward, False 
-            
-        if not self.check_aabb_collision(ax, ay, aw, ah, defender["x"], defender["y"], hw, hh):
-            return reward, False 
-            
-        if hit_type == 4: 
-            if defender["y"] > 0 or defender["crouching"]: 
-                return reward, False 
-            if defender["tech_timer"] > 0:
-                attacker["x"] -= 40
-                defender["x"] += 40
-                return reward, True 
-            else:
-                defender["health"] -= move_data[3]
-                defender["state"] = 6 
-                defender["timer"] = 60
-                defender["invincible"] = 1
-                return reward + 50.0, True
+        # Determine who had more health if time ran out
+        p1_wins_timeout = time_over & (self.p1_hp > self.p2_hp)
+        p2_wins_timeout = time_over & (self.p2_hp > self.p1_hp)
 
-        is_blocked = False
-        if defender["blocking"] == 1 and hit_type != 2: 
-            is_blocked = True
-        elif defender["blocking"] == 2 and hit_type != 3: 
-            is_blocked = True
+        # Terminate if someone dies OR time runs out
+        died = (self.p1_hp <= 0) | (self.p2_hp <= 0)
+        terminated = died | time_over
 
-        if is_blocked:
-            defender["health"] -= move_data[3] * 0.15 
-            defender["state"] = 5 
-            defender["timer"] = abs(move_data[9])
-            defender["x"] += move_data[10] 
-        else:
-            if defender["invincible"]: return reward, False 
-            
-            defender["combo_count"] += 1
-            scaling_factor = 0.9 ** (defender["combo_count"] - 1)
-            actual_damage = move_data[3] * scaling_factor
-            
-            defender["health"] -= actual_damage
-            reward += (actual_damage * 2.0) 
-            
-            defender["state"] = 4 
-            defender["timer"] = move_data[8]
-            defender["x"] += move_data[10]
-            
-            if move_data[11] > 0: 
-                defender["vy"] = move_data[11]
-
-        return reward, True
-
-    def step(self, action):
-        # --- THE TIME PENALTY FIX (-0.1 keeps it aggressive but winnable) ---
-        reward = -0.1 
+        # Apply massive Win/Loss rewards based on Deaths
+        reward += np.where(self.p2_hp <= 0, 1000.0, 0.0)
+        reward -= np.where(self.p1_hp <= 0, 1000.0, 0.0)
         
-        terminated = False
-        truncated = False
-        self.frames_elapsed += 1
+        # Apply massive Win/Loss rewards based on Time Outs
+        reward += np.where(p2_wins_timeout, 1000.0, 0.0)
+        reward -= np.where(p1_wins_timeout, 1000.0, 0.0)
 
-        self.apply_gravity_and_juggling(self.sz)
-        self.apply_gravity_and_juggling(self.k)
+        # THE FIX: THE COWARDICE PENALTY
+        # If time runs out and health is tied, hit both bots with a massive penalty
+        is_draw = time_over & (self.p1_hp == self.p2_hp)
+        reward -= np.where(is_draw, 1000.0, 0.0)
 
-        self.sz["crouching"] = 0
-        self.sz["blocking"] = 0
+        self.ep_returns += reward
 
-        if self.sz["state"] == 0: 
-            if action == 1: self.sz["x"] = min(self.sz["x"] + self.walk_speed, self.k["x"] - 30) 
-            elif action == 2: self.sz["x"] = max(self.sz["x"] - self.walk_speed, 0) 
-            elif action == 3: self.sz["blocking"] = 1 
-            elif action == 4: self.sz["crouching"] = 1 
-            elif action == 5: 
-                self.sz["crouching"] = 1
-                self.sz["blocking"] = 2 
-            
-            elif action >= 6 and action <= 11: 
-                self.sz["current_move"] = action
-                self.sz["state"] = 1 
-                self.sz["timer"] = SUBZERO_MOVES[action]["frames"][0]
+        terminal_obs = self._get_obs()
+        infos = [{} for _ in range(self.n)]
+        for i in range(self.n):
+            if terminated[i]:
+                infos[i]["terminal_observation"] = terminal_obs[i]
+                infos[i]["episode"] = {"r": self.ep_returns[i], "l": self.ep_lengths[i]}
 
-        elif self.sz["state"] == 6: 
-            if action == 12: 
-                self.sz["state"] = 3 
-                self.sz["timer"] = 30 
-                self.sz["x"] += 80
-            elif action == 13: 
-                self.sz["state"] = 3 
-                self.sz["timer"] = 30 
-                self.sz["x"] -= 80
-            elif action == 14: 
-                self.sz["timer"] += 30 
+        if np.any(terminated):
+            self._reset_all(np.where(terminated)[0])
 
-        if self.sz["state"] == 1: 
-            self.sz["timer"] -= 1
-            if self.sz["timer"] <= 0:
-                self.sz["state"] = 2 
-                self.sz["timer"] = SUBZERO_MOVES[self.sz["current_move"]]["frames"][1]
+        return self._get_obs(), reward, terminated, infos
 
-        elif self.sz["state"] == 2: 
-            move_data = SUBZERO_MOVES[self.sz["current_move"]]["frames"]
-            reward, hit_registered = self.process_combat(self.sz, self.k, move_data, reward)
-            
-            if hit_registered:
-                self.sz["state"] = 3 
-                self.sz["timer"] = move_data[2]
-            else:
-                self.sz["timer"] -= 1
-                if self.sz["timer"] <= 0:
-                    self.sz["state"] = 3 
-                    self.sz["timer"] = move_data[2]
-                    # No Whiff Penalty = No Fear
+    def close(self): pass
+    def env_is_wrapped(self, wrapper_class, indices=None): return [False] * self.n
+    def env_method(self, method_name, *args, indices=None, **kwargs): raise NotImplementedError("Use batched methods directly")
+    def get_attr(self, attr_name, indices=None): return [getattr(self, attr_name)] * self.n
+    def set_attr(self, attr_name, value, indices=None): setattr(self, attr_name, value)
+    def seed(self, seed=None): pass
 
-        elif self.sz["state"] in [3, 4, 5]: 
-            self.sz["timer"] -= 1
-            if self.sz["timer"] <= 0:
-                self.sz["state"] = 0
-                self.sz["combo_count"] = 0 
+# ==========================================
+# TRAINING LOOP (RECURRENT LSTM)
+# ==========================================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--side", type=str, default="sz")
+    args = parser.parse_args()
 
-        elif self.sz["state"] == 6: 
-            self.sz["timer"] -= 1
-            if self.sz["timer"] <= 0:
-                self.sz["state"] = 0
-                self.sz["invincible"] = 0
+    print(f">> Initializing MK11 Simulation ({args.side})...")
+    
+    if not os.path.exists("models"): os.makedirs("models")
 
-        if self.k["state"] in [3, 4, 5, 6]:
-            self.k["timer"] -= 1
-            if self.k["timer"] <= 0:
-                self.k["state"] = 0
-                self.k["invincible"] = 0
-                if self.k["state"] != 4: self.k["combo_count"] = 0
-        if self.k["tech_timer"] > 0: self.k["tech_timer"] -= 1
+    env = MK11VecEnv(num_envs=32, training_side=args.side)
 
-        # --- STAGE BOUNDARIES (Prevents OutOfBounds Crash) ---
-        self.k["x"] = max(0.0, min(self.k["x"], 1900.0)) 
-        self.sz["x"] = max(0.0, min(self.sz["x"], 1900.0)) 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_path = f"models/sim_model_{args.side}.zip"
 
-        if self.k["health"] <= 0:
-            reward += 1000.0
-            terminated = True
-        elif self.sz["health"] <= 0:
-            reward -= 1000.0
-            terminated = True
+    policy_kwargs = dict(lstm_hidden_size=256, n_lstm_layers=1)
 
-        if self.frames_elapsed > 3600: 
-            truncated = True
+    if os.path.exists(model_path):
+        print(f">> Resuming training from {model_path}...")
+        model = RecurrentPPO.load(model_path, env=env, device=device)
+    else:
+        print(">> Generating NEW Recurrent Brain...")
+        model = RecurrentPPO("MlpLstmPolicy", env, verbose=1, device=device, 
+                             policy_kwargs=policy_kwargs, n_steps=512, batch_size=128)
 
-        return self._get_obs(), reward, terminated, truncated, {}
+    try:
+        model.learn(total_timesteps=100_000_000, log_interval=10)
+    except KeyboardInterrupt:
+        print("\n>> Training interrupted. Saving progress...")
+    finally:
+        model.save(model_path)
+        print(f">> Brain saved to {model_path}")
