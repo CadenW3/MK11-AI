@@ -5,6 +5,7 @@ import struct
 import threading
 import time
 import ctypes
+from collections import deque
 
 # Force Windows to use raw pixels for coordinate accuracy
 ctypes.windll.user32.SetProcessDPIAware()
@@ -42,20 +43,25 @@ class VisionEngine(threading.Thread):
             self.running = False
 
     def decode_buttons(self, mask):
-        """Maps bitmask to button names from PlayerInfo.h"""
+        """Maps bitmask to button names from the True MK11 PlayerInfo.h Enum"""
         buttons = []
-        if mask & 64:    buttons.append("FP") # Square/X
-        if mask & 16:    buttons.append("BP") # Triangle/Y
-        if mask & 32:    buttons.append("FK") # Cross/A
-        if mask & 128:   buttons.append("BK") # Circle/B
-        if mask & 4096:  buttons.append("THRW")
-        if mask & 8192:  buttons.append("INT") # Interact
-        if mask & 32768: buttons.append("BLCK")
         if mask & 1:     buttons.append("UP")
         if mask & 2:     buttons.append("DWN")
         if mask & 4:     buttons.append("LFT")
         if mask & 8:     buttons.append("RGT")
-        return "+".join(buttons) if buttons else "NONE"
+        if mask & 16:    buttons.append("BP")   # Triangle/Y
+        if mask & 32:    buttons.append("FK")   # Cross/A
+        if mask & 64:    buttons.append("FP")   # Square/X
+        if mask & 128:   buttons.append("BK")   # Circle/B
+        if mask & 256:   buttons.append("UNK")  
+        if mask & 512:   buttons.append("RST")  # Reset
+        if mask & 2048:  buttons.append("AST")  # Assist
+        if mask & 4096:  buttons.append("THRW") # Throw
+        if mask & 8192:  buttons.append("INT")  # Interact
+        if mask & 16384: buttons.append("FLIP") # Flip Stance
+        if mask & 32768: buttons.append("BLCK") # Block
+        
+        return buttons
 
     def _get_character_data(self, char_ptr, info_ptr):
         try:
@@ -63,6 +69,10 @@ class VisionEngine(threading.Thread):
             transform_ptr = self.pm.read_longlong(char_ptr + 0x20)
             x = self.pm.read_float(transform_ptr + 0x11C) 
             y = self.pm.read_float(transform_ptr + 0x120) 
+            
+            # Unreal Engine 4 Skeletal Mesh Pointer Chain (For future 3D bone tracking)
+            # mesh_ptr = self.pm.read_longlong(char_ptr + 0x280) 
+            # bone_array_ptr = self.pm.read_longlong(mesh_ptr + 0x4B0) # Transform array
 
             gamepad_ptr = self.pm.read_longlong(info_ptr + 0x30)
             button_mask = self.pm.read_uint(gamepad_ptr + 0x1C) if gamepad_ptr else 0
@@ -117,13 +127,24 @@ class VisionEngine(threading.Thread):
                 self.p1_char_ptr = 0
                 self.p2_char_ptr = 0
             
-            time.sleep(0.01)
+            time.sleep(0.005) # 200 Hz Polling Rate for frame-perfect input reading
 
 # =========================================================
-# HEURISTIC ACTION DECODER
+# HEURISTIC ACTION & SPECIAL DECODER
 # =========================================================
-def get_action_name(inputs, y_pos):
-    """ Translates raw engine buttons into fighting game terminology """
+def get_action_name(inputs, y_pos, input_history):
+    """ Translates raw engine buttons into fighting game terminology, including specials """
+    
+    # Check for Projectiles / Special Moves (Sequence Detection)
+    # Most specials are D,B+Face or D,F+Face. We look at the last 15 frames of inputs.
+    recent_dirs = [btn for frame in input_history for btn in frame if btn in ["DWN", "LFT", "RGT", "UP"]]
+    face_buttons = [btn for btn in inputs if btn in ["FP", "BP", "FK", "BK"]]
+    
+    if face_buttons and "DWN" in recent_dirs:
+        if "LFT" in recent_dirs or "RGT" in recent_dirs:
+            return f"*** SPECIAL MOVE / PROJECTILE ({face_buttons[0]}) ***"
+
+    # Standard Actions
     if y_pos > 10.0:
         if "FP" in inputs or "BP" in inputs: return "Jump Punch"
         if "FK" in inputs or "BK" in inputs: return "Jump Kick"
@@ -134,6 +155,7 @@ def get_action_name(inputs, y_pos):
         return "Stand Block"
         
     if "THRW" in inputs: return "Throw Attempt"
+    if "INT" in inputs: return "Interact / Amplifying"
 
     if "DWN" in inputs:
         if "FP" in inputs: return "D1 Poke"
@@ -153,7 +175,7 @@ def get_action_name(inputs, y_pos):
     return "IDLE"
 
 # =========================================================
-# MAIN SCROLLING LOGGER
+# MAIN SCROLLING LOGGER & COMBO TRACKER
 # =========================================================
 if __name__ == "__main__":
     engine = VisionEngine()
@@ -161,8 +183,21 @@ if __name__ == "__main__":
 
     print(">> Scanning for match...")
     
-    last_p1_input = ""
-    last_p2_input = ""
+    # Input History Buffers (Rolling 15-frame window for Special Move detection)
+    p1_input_history = deque(maxlen=15)
+    p2_input_history = deque(maxlen=15)
+    
+    last_p1_input_str = ""
+    last_p2_input_str = ""
+
+    # DMA True Combo Tracker Variables
+    p1_combo_count = 0
+    p1_last_hp = 1.0
+    p1_hitstun_frames = 0
+    
+    p2_combo_count = 0
+    p2_last_hp = 1.0
+    p2_hitstun_frames = 0
 
     try:
         while True:
@@ -171,20 +206,51 @@ if __name__ == "__main__":
                 p2 = engine.data["p2"]
 
             if p1 and p2:
-                # ONLY print when someone presses or releases a button
-                if p1['inputs'] != last_p1_input or p2['inputs'] != last_p2_input:
+                p1_input_history.append(p1['inputs'])
+                p2_input_history.append(p2['inputs'])
+                
+                # --- DMA COMBO TRACKER LOGIC ---
+                # P1 Combo State
+                if p1['hp'] < p1_last_hp - 0.005: 
+                    p2_combo_count += 1
+                    p1_hitstun_frames = 60 # Set arbitrary hitstun decay timer
+                elif p1_hitstun_frames > 0:
+                    p1_hitstun_frames -= 1
+                    if p1_hitstun_frames == 0:
+                        p2_combo_count = 0 # Combo dropped/ended
+                p1_last_hp = p1['hp']
+
+                # P2 Combo State
+                if p2['hp'] < p2_last_hp - 0.005: 
+                    p1_combo_count += 1
+                    p2_hitstun_frames = 60 
+                elif p2_hitstun_frames > 0:
+                    p2_hitstun_frames -= 1
+                    if p2_hitstun_frames == 0:
+                        p1_combo_count = 0
+                p2_last_hp = p2['hp']
+                # -------------------------------
+
+                p1_str = "+".join(p1['inputs']) if p1['inputs'] else "NONE"
+                p2_str = "+".join(p2['inputs']) if p2['inputs'] else "NONE"
+
+                # ONLY print when a button changes or a combo increments
+                if p1_str != last_p1_input_str or p2_str != last_p2_input_str:
                     
-                    p1_action = get_action_name(p1['inputs'], p1['y'])
-                    p2_action = get_action_name(p2['inputs'], p2['y'])
+                    p1_action = get_action_name(p1['inputs'], p1['y'], p1_input_history)
+                    p2_action = get_action_name(p2['inputs'], p2['y'], p2_input_history)
                     
-                    print(f"P1 | HP: {p1['hp']*1000:>4.0f} | Pos: ({p1['x']:>7.2f}, {p1['y']:>6.2f}) | Input: {p1['inputs']:<12} | Action: {p1_action}")
-                    print(f"P2 | HP: {p2['hp']*1000:>4.0f} | Pos: ({p2['x']:>7.2f}, {p2['y']:>6.2f}) | Input: {p2['inputs']:<12} | Action: {p2_action}")
-                    print("-" * 90)
+                    p1_combo_tag = f"[P1 COMBO: {p1_combo_count}]" if p1_combo_count > 1 else ""
+                    p2_combo_tag = f"[P2 COMBO: {p2_combo_count}]" if p2_combo_count > 1 else ""
                     
-                    last_p1_input = p1['inputs']
-                    last_p2_input = p2['inputs']
+                    print(f"P1 | HP: {p1['hp']*1000:>4.0f} | Pos: ({p1['x']:>7.2f}, {p1['y']:>6.2f}) | Inp: {p1_str:<15} | {p1_action:<25} {p1_combo_tag}")
+                    print(f"P2 | HP: {p2['hp']*1000:>4.0f} | Pos: ({p2['x']:>7.2f}, {p2['y']:>6.2f}) | Inp: {p2_str:<15} | {p2_action:<25} {p2_combo_tag}")
+                    print("-" * 110)
+                    
+                    last_p1_input_str = p1_str
+                    last_p2_input_str = p2_str
             
-            time.sleep(0.01)
+            time.sleep(0.005) # Throttle to 200 FPS
     except KeyboardInterrupt:
         engine.running = False
         engine.join()
