@@ -103,20 +103,107 @@ def crouch(state=True):
 FRAME = 1.0 / 60.0
 
 def punish_throw_combo():
-    """Double Front Punch (X, X) combo specifically for post-throw defense."""
+    """Double Front Punch (X, X) → Hellport×2 Amplify chain combo for post-throw punish."""
     # First X
     gamepad.press_button(BTN.XUSB_GAMEPAD_X)
     gamepad.update()
     time.sleep(FRAME * 2)
     _reset()
-    time.sleep(FRAME * 10) # Tiny gap between hits
-    
+    time.sleep(FRAME * 10)
+
     # Second X
     gamepad.press_button(BTN.XUSB_GAMEPAD_X)
     gamepad.update()
     time.sleep(FRAME * 2)
+    #_reset()
+    #time.sleep(FRAME * 2)
+    
+    # --- Hellport #1: Back, Down, Back ---
+    gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_DOWN)
+    gamepad.update()
+    time.sleep(FRAME * 2)
     _reset()
-    time.sleep(FRAME * 25) # Recovery before next read
+    
+    gamepad.press_button(BWD) 
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+
+    gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_DOWN)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+    
+    gamepad.press_button(BWD) 
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+
+    # Press A for the Hellport attack
+    gamepad.press_button(BTN.XUSB_GAMEPAD_A)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+    
+    time.sleep(FRAME * 11)
+    gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
+    gamepad.update()
+    time.sleep(FRAME * 1) # Hold for 1 frame
+    
+    _reset()              # Release
+    time.sleep(FRAME * 74)
+    gamepad.press_button(BTN.XUSB_GAMEPAD_B)
+    gamepad.update()
+    time.sleep(FRAME * 1) # Hold for 1 frame
+    
+    _reset()              # Release
+    time.sleep(FRAME * 10) # Unpressed for 10 frame
+
+    gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_DOWN)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+    
+    
+    gamepad.press_button(FWD) 
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+
+    # Press A for the Hellport attack
+    gamepad.press_button(BTN.XUSB_GAMEPAD_A)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+
+    time.sleep(FRAME * 9)  # 9 is actually the best fit, tried and tested
+    gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
+    gamepad.update()
+    time.sleep(FRAME * 1) # Hold for 1 frame
+    
+    _reset()              # Release
+    time.sleep(FRAME * 69) # 73 and under work, need to find best fit
+    gamepad.press_button(BTN.XUSB_GAMEPAD_B)
+    gamepad.update()
+    time.sleep(FRAME * 1) # Hold for 1 frame
+    _reset()              # Release
+    time.sleep(FRAME * 4) # Unpressed for 10 frame
+
+
+    # --- Ender: Left + Right + Triangle (Y) ---
+    gamepad.press_button(BWD)
+    gamepad.update()
+    time.sleep(FRAME)
+    _reset()
+    gamepad.press_button(FWD)
+    gamepad.update()
+    time.sleep(FRAME)
+    _reset()
+    gamepad.press_button(BTN.XUSB_GAMEPAD_Y)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+    time.sleep(FRAME * 30)  # Full recovery after enderv '''
 
 def punish_heavy():
     """Full 1,1,2 string (X, X, Y) for highly unsafe moves (Fatal Blows, Shotei Fury)."""
@@ -539,11 +626,8 @@ def main():
                 print(f"!!! THROW DEFENSE DETECTED - Distance: {dist:.1f}")
                 total_wait = 0.01 - time_elapsed
                 time.sleep(max(0, total_wait))
-                gamepad.press_button(BTN.XUSB_GAMEPAD_X)
-                gamepad.update()
-                time.sleep(FRAME * 2)
-                _reset()
                 punish_throw_combo()
+                
 
             # ---------------------------------------------------------
 
