@@ -235,6 +235,47 @@ def punish_poke():
     _reset()
     time.sleep(FRAME * 18) # Quick recovery to resume blocking
 
+def counter_after_block():
+    """ Hit up + Y to instantly start a juggle combo"""
+    gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_UP)
+    gamepad.press_button(BTN.XUSB_GAMEPAD_Y)
+    gamepad.update() 
+    time.sleep(FRAME * 2) 
+    _reset()
+
+    # time delay (timed perfectly)
+    time.sleep(FRAME * 44) 
+
+    # --- Ender: Back, Forward, Y ---
+    gamepad.press_button(BWD)
+    gamepad.update()
+    time.sleep(FRAME)
+    _reset()
+    
+    gamepad.press_button(FWD)
+    gamepad.update()
+    time.sleep(FRAME)
+    _reset()
+    
+    gamepad.press_button(BTN.XUSB_GAMEPAD_Y)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+    
+    # Full recovery after the ender connects
+    time.sleep(FRAME * 30)
+
+    time.sleep(FRAME * 30)  # Full recovery
+
+def counter_fast():
+    """ Hit up + X to instantly push opponent away for faster attacks"""
+    gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_UP)
+    gamepad.update()
+    gamepad.press_button(BTN.XUSB_GAMEPAD_X)
+    gamepad.update()
+    time.sleep(FRAME * 2)
+    _reset()
+
 def punish_ranged():
     """Teleport (Hellport: Down, Back, A) to counter projectiles from a distance."""
     gamepad.press_button(BTN.XUSB_GAMEPAD_DPAD_DOWN)
@@ -414,8 +455,9 @@ def main():
                 block(False)
                 print(">>> Block Released")
                 _reset()
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_fast()
+                #punish_heavy()
             
             # Forward Front Punch block
             if current_hash == "607859926":
@@ -426,8 +468,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Down Front Punch block
             if current_hash == "2824186958":
@@ -438,8 +481,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Backward Front Punch block
             if current_hash == "2122140632":
@@ -450,8 +494,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Up Front Punch block
             if current_hash == "2831421598":
@@ -462,8 +507,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Back Punch block
             if current_hash == "3768540965":
@@ -474,8 +520,9 @@ def main():
                 time.sleep(0.3)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Forward Back Punch block
             if current_hash == "2357853487":
@@ -483,11 +530,12 @@ def main():
                 total_wait = 0.175 - time_elapsed
                 time.sleep(max(0, total_wait))
                 block(True)
-                time.sleep(0.3)
+                time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Down Back Punch block
             if current_hash == "3479665097":
@@ -498,8 +546,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Backward Back Punch block
             if current_hash == "456944475":
@@ -510,8 +559,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Front Kick block
             if current_hash == "3768540964":
@@ -522,8 +572,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # ForwardFront Kick block
             if current_hash == "3036668384":
@@ -531,11 +582,12 @@ def main():
                 total_wait = 0.3 - time_elapsed
                 time.sleep(max(0, total_wait))
                 block(True)
-                time.sleep(0.2)
+                time.sleep(0.1)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Down Front Kick block
             if current_hash == "85556008":
@@ -546,8 +598,9 @@ def main():
                 time.sleep(0.15)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Backward Front Kick block
             if current_hash == "268592778":
@@ -558,8 +611,9 @@ def main():
                 time.sleep(0.4)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Back Kick block
             if current_hash == "3768540963":
@@ -570,8 +624,9 @@ def main():
                 time.sleep(0.4)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
             
             # Forward Back Kick block
             if current_hash == "506215777":
@@ -582,8 +637,9 @@ def main():
                 time.sleep(0.4)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Down Back Kick block
             if current_hash == "4224942067":
@@ -594,8 +650,9 @@ def main():
                 time.sleep(0.4)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Backward Back Kick block
             if current_hash == "3437910845":
@@ -606,8 +663,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Up Back Kick block
             if current_hash == "1372080832":
@@ -618,8 +676,9 @@ def main():
                 time.sleep(0.2)
                 block(False)
                 print(">>> Block Released")
-                time.sleep(0.3)
-                punish_poke()
+                #time.sleep(0.3)
+                counter_after_block()
+                #punish_heavy()
 
             # Throw defense
             if current_hash == "4217316500" or current_hash == "4217316500":
